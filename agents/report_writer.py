@@ -7,22 +7,17 @@
 LLM은 본문 문장만 쓴다. 판정·총점이 들어가는 SUMMARY 첫 줄, 모든 표, 분석의 한계, REFERENCE는 코드가 만든다.
 → 판정과 다른 결론을 쓰거나, 표의 수치가 바뀌거나, 사용하지 않은 출처가 들어갈 수 없다.
 """
-import re
-import unicodedata
 from datetime import datetime
-from functools import lru_cache
 
-import markdown
-from fpdf import FPDF
 from pydantic import BaseModel, Field
 
-from config import INVEST_THRESHOLD, OUTPUT_DIR, PROMPT_DIR, ROOT
+from config import INVEST_THRESHOLD, OUTPUT_DIR, PROMPT_DIR
 from schemas import SEGMENT_KO
 from tools.citations import strip
 from tools.llm import ask_structured, get_llm
 from tools.references import format_reference, unique
+from tools.report_pdf import render
 
-FONT_DIR = ROOT / "assets" / "fonts"
 MAX_PAGES = 5
 REF_LABEL = {"report": "기관 보고서", "paper": "학술 논문", "web": "웹페이지"}
 
@@ -234,72 +229,16 @@ def _dump(data) -> str:
 
 
 # ── PDF ───────────────────────────────────────────────────
-def _visual_len(text: str) -> int:
-    """한글·한자는 영문보다 약 두 배 넓으므로 두 칸으로 센다."""
-    return sum(2 if ord(ch) > 0x2E80 else 1 for ch in text)
-
-
-# SUIT 폰트에 없는 글자 → 비슷한 글자로 바꾼다 (없으면 PDF에서 글자가 빠진다)
-GLYPH_FALLBACK = {"—": "-", "–": "-", "•": "-", "Ø": "O", "ø": "o", "美": "미", "中": "중", "日": "일",
-                  "韓": "한", "英": "영", "獨": "독", "佛": "불", "\u00a0": " "}
-
-
-@lru_cache(maxsize=1)
-def _font_chars() -> frozenset:
-    from fontTools.ttLib import TTFont  # fpdf2 의존성으로 함께 설치됨
-    return frozenset(TTFont(str(FONT_DIR / "SUIT-Regular.ttf")).getBestCmap())
-
-
-def _fit_font(text: str) -> str:
-    chars, out = _font_chars(), []
-    for ch in text:
-        if ord(ch) in chars or ch in "\n\t":
-            out.append(ch)
-        elif ch in GLYPH_FALLBACK:
-            out.append(GLYPH_FALLBACK[ch])
-        else:  # 악센트 글자는 기본 글자로 (é → e), 그래도 없으면 뺀다
-            base = unicodedata.normalize("NFKD", ch)[0]
-            out.append(base if ord(base) in chars else "")
-    return "".join(out)
-
-
-def _size_columns(html: str) -> str:
-    """표마다 열 너비를 내용 길이에 비례해 정하고, 칸 안 글자는 왼쪽 정렬한다 (기본은 모든 열이 같은 너비)."""
-    def fix(match):
-        table = match.group(0)
-        rows = re.findall(r"<tr>(.*?)</tr>", table, flags=re.S)
-        cells = [re.findall(r"<t[hd](?:\s[^>]*)?>(.*?)</t[hd]>", r, flags=re.S) for r in rows]
-        cols = len(cells[0])
-        lengths = [max(min(_visual_len(re.sub(r"<[^>]+>", "", row[i])), 60) for row in cells if len(row) > i)
-                   for i in range(cols)]
-        # 열 너비는 가장 긴 단어보다 좁지 않게 ("GE Vernova"가 "Vernov/a"로 끊기지 않도록)
-        words = [max((_visual_len(w) for row in cells if len(row) > i
-                      for w in re.sub(r"<[^>]+>", "", row[i]).split()), default=0) for i in range(cols)]
-        lengths = [max(n, 9, min(w + 7, 24)) for n, w in zip(lengths, words)]
-        widths = [round(100 * n / sum(lengths)) for n in lengths]
-        head = iter(widths)
-        table = re.sub(r"<th(\s[^>]*)?>", lambda m: f'<th width="{next(head)}%"{m.group(1) or ""}>', table, count=cols)
-        return re.sub(r"<td>", '<td align="left">', table)
-    return re.sub(r"<table>.*?</table>", fix, html, flags=re.S)
-
-
-def render_pdf(md_text: str, path, font_size: float = 9.5) -> int:
-    """표 제목은 ### 로 쓴다. fpdf2는 표 바로 앞 문단이 굵은 글씨(**...**)면 표 전체를 굵게 그린다."""
-    md_text = _fit_font(md_text)
-    html = markdown.markdown(md_text, extensions=["tables"])
-    html = re.sub(r"<li>\s*<p>(.*?)</p>\s*</li>", r"<li>\1</li>", html, flags=re.S)
-    html = _size_columns(html)
-    pdf = FPDF(format="A4")
-    pdf.set_margins(16, 14, 16)
-    pdf.set_auto_page_break(True, margin=14)
-    for style, file in (("", "SUIT-Regular.ttf"), ("B", "SUIT-Bold.ttf"), ("I", "SUIT-Regular.ttf"), ("BI", "SUIT-Bold.ttf")):
-        pdf.add_font("SUIT", style, str(FONT_DIR / file))
-    pdf.add_page()
-    pdf.set_font("SUIT", size=font_size)
-    pdf.write_html(html, font_family="SUIT", ul_bullet_char="-", table_line_separators=True,
-                   heading_sizes={"h1": font_size + 7, "h2": font_size + 3, "h3": font_size + 1})
-    pdf.output(str(path))
-    return pdf.page_no()
+def _bars(state: dict, invest: bool) -> dict:
+    """보고서 상단의 점수 막대: 투자면 대상 기업 총점, 보류면 후보별 총점 비교."""
+    if invest:
+        return {"title": "종합 투자 점수", "values": [(state["current"]["name"], state["total_score"])],
+                "threshold": INVEST_THRESHOLD, "highlight": 0, "after": "summary"}
+    history = state.get("history", [])
+    values = [(h["startup"], h["total_score"]) for h in history]
+    best = max(range(len(values)), key=lambda k: values[k][1]) if values else None
+    return {"title": "후보 총점 비교 · 전체 보류 (빨강: 최고점 후보)", "values": values,
+            "threshold": INVEST_THRESHOLD, "highlight": best, "after": "chapter2"}
 
 
 def run(state: dict) -> dict:
@@ -311,9 +250,9 @@ def run(state: dict) -> dict:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     md_path, pdf_path = OUTPUT_DIR / f"report_{stamp}.md", OUTPUT_DIR / f"report_{stamp}.pdf"
     md_path.write_text(text, encoding="utf-8")
-    pages, size = 0, 9.5
+    pages, size, bars = 0, 9.5, _bars(state, invest)
     while size >= 8:  # 5장을 넘으면 글자 크기를 줄여 다시 조판
-        pages = render_pdf(text, pdf_path, size)
+        pages = render(text, pdf_path, size, bars if bars["values"] else None)
         if pages <= MAX_PAGES:
             break
         size -= 0.5

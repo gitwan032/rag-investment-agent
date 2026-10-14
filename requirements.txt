@@ -26,9 +26,8 @@ pydantic==2.14.1
 python-dotenv==1.2.4
 PyYAML==6.0.3
 
-# 보고서 PDF (Markdown → HTML → PDF)
+# 보고서 PDF (팀 보고서 디자인으로 직접 조판)
 fpdf2==2.8.9
-markdown==3.11.1
 
 # 테스트
 pytest==9.1.1

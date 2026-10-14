@@ -36,7 +36,7 @@ Energy 분야 AI 스타트업(전력 수요 예측 · 발전 예측/VPP · 배�
 | Reranker | `BAAI/bge-reranker-v2-m3` (오픈소스, 로컬 실행) |
 | Chunking | bge-m3 토크나이저 기준 400토큰 / overlap 50 (페이지 단위 분할) |
 | Web Search | Tavily (`langchain-tavily`) |
-| PDF | PyMuPDF(문서 읽기), markdown + fpdf2 + SUIT 폰트(보고서 출력) |
+| PDF | PyMuPDF(문서 읽기), fpdf2 + SUIT 폰트(보고서 출력, 팀 보고서 디자인을 따라 직접 조판) |
 | Structured Output | Pydantic v2 |
 | Test | pytest (15개) |
 
@@ -153,7 +153,7 @@ flowchart LR
 ├── graph/                  # 그래프 조립(builder), 조건부 라우팅(routing)
 ├── agents/                 # 6개 에이전트 + 후보 선택 노드 + 흐름 검증용 stub
 ├── rag/                    # 문서 인제스트, 임베딩, 벡터스토어, 검색기, Agentic RAG
-├── tools/                  # LLM 호출, 웹 검색, 근거 번호 검증, 출처(REFERENCE) 형식
+├── tools/                  # LLM 호출, 웹 검색, 근거 번호 검증, 출처(REFERENCE) 형식, PDF 조판
 ├── prompts/                # 에이전트별 프롬프트
 ├── config/
 │   ├── docs.yaml           # RAG 문서 목록·사용 쪽수·출처 정보
@@ -166,7 +166,7 @@ flowchart LR
 ├── eval/                  # 검색기·청크 크기 비교(Hit Rate@5, MRR), Agentic RAG 질문 방식 비교
 ├── tests/                  # 그래프 흐름, 판정 계산, 근거 검증, 출처 형식 테스트
 ├── docs/EXPERIMENTS.md     # 팀 설계 대비 변경점과 측정 근거
-├── assets/fonts/           # SUIT 폰트 (OFL 라이선스)
+├── assets/                # SUIT 폰트(OFL 라이선스), 보고서 로고
 ├── outputs/                # 보고서, 평가 결과, 실행 로그
 ├── requirements.txt
 └── .env.example
